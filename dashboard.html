@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบบริหารจัดการข้อมูลสุขภาพผู้ป่วย (Health Data Analytics)</title>
+    
+    <!-- Libraries -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jstat@1.9.4/dist/jstat.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#064e3b', // Emerald 900
+                        secondary: '#10b981', // Emerald 500
+                        accent: '#34d399', // Emerald 400
+                        surface: '#ffffff',
+                        background: '#f0fdf4', // Emerald 50
+                    },
+                    fontFamily: {
+                        sans: ['Sarabun', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body { font-family: 'Sarabun', sans-serif; background-color: #f0fdf4; }
+        .card { background: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); transition: transform 0.2s; }
+        .card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        .chart-container { position: relative; height: 250px; width: 100%; }
+        .table-header { background-color: #064e3b; color: white; }
+        .stat-box { border-left: 4px solid #10b981; }
+        
+        /* Modal & Overlays */
+        .modal { display: none; position: fixed; z-index: 50; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.6); }
+        .modal-content { background-color: #fefefe; margin: 5% auto; padding: 20px; border: 1px solid #888; width: 90%; max-width: 800px; border-radius: 10px; position: relative; }
+        
+        /* Loading Overlay */
+        #loadingOverlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); z-index: 100; justify-content: center; align-items: center; flex-direction: column; }
+        .spinner { border: 8px solid #f3f3f3; border-top: 8px solid #064e3b; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* Animation */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
+    </style>
+</head>
+<body class="text-gray-800">
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay">
+        <div class="spinner mb-4"></div>
+        <div class="text-xl font-bold text-primary" id="loadingText">กำลังเชื่อมต่อฐานข้อมูล...</div>
+    </div>
+
+    <!-- Navbar -->
+    <nav class="bg-primary text-white shadow-lg sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <i class="fas fa-heartbeat text-2xl mr-3 text-secondary"></i>
+                    <span class="font-bold text-xl">HealthAnalytics Dashboard</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <div id="connection-status" class="text-xs flex items-center bg-white/10 px-2 py-1 rounded">
+                        <span class="w-2 h-2 rounded-full bg-gray-400 mr-2" id="status-dot"></span>
+                        <span id="status-text">Connecting...</span>
+                    </div>
+                    <button onclick="fetchData()" class="hidden md:inline-flex bg-secondary hover:bg-green-600 text-white px-3 py-1 rounded text-sm items-center transition">
+                        <i class="fas fa-sync-alt mr-1"></i> Refresh Data
+                    </button>
+                    <!-- Import CSV hidden as requested, prioritizing online -->
+                     <label class="hidden md:inline-flex bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm cursor-pointer items-center transition opacity-50 hover:opacity-100" title="สำรอง: นำเข้าไฟล์ CSV หากเน็ตหลุด">
+                        <i class="fas fa-file-upload mr-1"></i> Import Backup
+                        <input type="file" id="fileUpload" class="hidden" accept=".csv">
+                    </label>
+                    <div class="h-6 w-px bg-green-700 mx-2"></div>
+                    <button id="loginBtn" onclick="toggleLoginModal()" class="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow transition transform hover:scale-105">
+                        <i class="fas fa-user-lock mr-1"></i> Admin Login
+                    </button>
+                    <button id="logoutBtn" onclick="logout()" class="hidden bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded text-sm font-bold shadow transition">
+                        <i class="fas fa-sign-out-alt mr-1"></i> Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        
+        <!-- Controls & Filters (Visible to All) -->
+        <div class="bg-white p-4 rounded-lg shadow mb-6 flex flex-wrap gap-4 items-center justify-between border-l-4 border-primary animate-fade-in">
+            <div class="flex items-center gap-2">
+                <div class="bg-green-100 p-2 rounded-full text-primary"><i class="fas fa-filter"></i></div>
+                <span class="font-semibold text-primary">ตัวกรองข้อมูล:</span>
+            </div>
+            <div class="flex gap-4 flex-grow max-w-md">
+                <select id="filter-insurance" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary shadow-sm">
+                    <option value="all">ทั้งหมด (ประเภทสิทธิ์)</option>
+                </select>
+            </div>
+            <div class="text-right">
+                <p class="text-xs text-gray-500 uppercase tracking-wide">จำนวนผู้ป่วยทั้งหมด</p>
+                <p class="text-3xl font-bold text-primary" id="total-patients">0</p>
+            </div>
+        </div>
+
+        <!-- Dashboard View (Visible to All) -->
+        <div id="dashboard-view" class="animate-fade-in">
+            <!-- Row 1: Demographics -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                <!-- Age Distribution -->
+                <div class="card p-5 col-span-2">
+                    <h3 class="text-lg font-bold text-primary mb-4 flex items-center"><i class="fas fa-chart-bar mr-2 text-secondary"></i>ช่วงอายุของผู้ป่วย</h3>
+                    <div class="chart-container">
+                        <canvas id="chart-age"></canvas>
+                    </div>
+                </div>
+                <!-- Gender -->
+                <div class="card p-5">
+                    <h3 class="text-lg font-bold text-primary mb-4 flex items-center"><i class="fas fa-venus-mars mr-2 text-secondary"></i>สัดส่วนเพศ</h3>
+                    <div class="chart-container" style="height: 200px;">
+                        <canvas id="chart-gender"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Row 2: Location & Insurance -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <!-- Address Table -->
+                <div class="card p-5 overflow-hidden">
+                    <h3 class="text-lg font-bold text-primary mb-4 flex items-center"><i class="fas fa-map-marker-alt mr-2 text-secondary"></i>สรุปที่อยู่ (ตำบล/หมู่บ้าน)</h3>
+                    <div class="overflow-y-auto h-64 border rounded-lg">
+                        <table class="min-w-full text-sm text-left text-gray-500">
+                            <thead class="text-xs text-gray-700 uppercase bg-gray-100 sticky top-0">
+                                <tr>
+                                    <th class="px-4 py-3 bg-gray-50">ตำบล</th>
+                                    <th class="px-4 py-3 bg-gray-50">หมู่บ้าน</th>
+                                    <th class="px-4 py-3 bg-gray-50 text-right">จำนวน</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-address-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <!-- Insurance -->
+                <div class="card p-5">
+                    <h3 class="text-lg font-bold text-primary mb-4 flex items-center"><i class="fas fa-file-medical mr-2 text-secondary"></i>ประเภทสิทธิ์การรักษา</h3>
+                    <div class="chart-container">
+                        <canvas id="chart-insurance"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Row 3: Diagnosis (Horizontal Bar) -->
+            <div class="card p-5 mb-6">
+                <h3 class="text-lg font-bold text-primary mb-4 flex items-center"><i class="fas fa-stethoscope mr-2 text-secondary"></i>การวินิจฉัยหลัก</h3>
+                <div class="chart-container" style="height: 300px;">
+                    <canvas id="chart-diagnosis"></canvas>
+                </div>
+            </div>
+
+            <!-- Row 4: Vitals & Lab (Grouped Bars) -->
+            <h2 class="text-2xl font-bold text-primary mb-4 border-b-2 border-green-100 pb-2 flex items-center">
+                <i class="fas fa-notes-medical mr-2"></i>ข้อมูลสุขภาพและผลแล็บ
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div class="card p-3 shadow-sm hover:shadow-md"><h4 class="font-bold text-center text-sm mb-1 text-gray-600">ความดันตัวบน (Sys)</h4><div class="h-32"><canvas id="chart-bp-sys"></canvas></div></div>
+                <div class="card p-3 shadow-sm hover:shadow-md"><h4 class="font-bold text-center text-sm mb-1 text-gray-600">ความดันตัวล่าง (Dia)</h4><div class="h-32"><canvas id="chart-bp-dia"></canvas></div></div>
+                <div class="card p-3 shadow-sm hover:shadow-md"><h4 class="font-bold text-center text-sm mb-1 text-gray-600">น้ำหนัก (kg)</h4><div class="h-32"><canvas id="chart-weight"></canvas></div></div>
+                <div class="card p-3 shadow-sm hover:shadow-md"><h4 class="font-bold text-center text-sm mb-1 text-gray-600">ส่วนสูง (cm)</h4><div class="h-32"><canvas id="chart-height"></canvas></div></div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                 <div class="card p-3 shadow-sm hover:shadow-md"><h4 class="font-bold text-center text-sm mb-1 text-gray-600">BMI</h4><div class="h-32"><canvas id="chart-bmi"></canvas></div></div>
+                 <div class="card p-3 shadow-sm hover:shadow-md"><h4 class="font-bold text-center text-sm mb-1 text-gray-600">FBS (น้ำตาล)</h4><div class="h-32"><canvas id="chart-fbs"></canvas></div></div>
+                 <div class="card p-3 shadow-sm hover:shadow-md"><h4 class="font-bold text-center text-sm mb-1 text-gray-600">HbA1c (น้ำตาลสะสม)</h4><div class="h-32"><canvas id="chart-hba1c"></canvas></div></div>
+                 <div class="card p-3 shadow-sm hover:shadow-md"><h4 class="font-bold text-center text-sm mb-1 text-gray-600">eGFR (ค่าไต)</h4><div class="h-32"><canvas id="chart-egfr"></canvas></div></div>
+            </div>
+
+            <!-- Row 5: Stats & Correlations -->
+            <h2 class="text-2xl font-bold text-primary mb-4 border-b-2 border-green-100 pb-2 flex items-center">
+                <i class="fas fa-calculator mr-2"></i>การวิเคราะห์ความสัมพันธ์และสถิติ
+            </h2>
+            
+            <!-- Chi-Square -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div class="card p-5 stat-box">
+                    <h3 class="text-md font-bold text-primary mb-3">ความสัมพันธ์: เพศ vs การดื่มแอลกอฮอล์ (Chi-Square)</h3>
+                    <div id="stat-gender-alcohol" class="text-sm p-2 bg-gray-50 rounded">กำลังคำนวณ...</div>
+                </div>
+                <div class="card p-5 stat-box">
+                    <h3 class="text-md font-bold text-primary mb-3">ความสัมพันธ์: เพศ vs การสูบบุหรี่ (Chi-Square)</h3>
+                    <div id="stat-gender-smoking" class="text-sm p-2 bg-gray-50 rounded">กำลังคำนวณ...</div>
+                </div>
+            </div>
+
+            <!-- T-Test -->
+            <div class="card p-5 mb-6 stat-box">
+                <h3 class="text-lg font-bold text-primary mb-3">เปรียบเทียบค่าเฉลี่ยสุขภาพระหว่างเพศชายและหญิง (Independent t-test)</h3>
+                <div class="overflow-x-auto rounded-lg border">
+                    <table class="min-w-full text-sm text-left">
+                        <thead class="bg-green-100 text-primary font-bold">
+                            <tr>
+                                <th class="px-4 py-3">ตัวแปร</th>
+                                <th class="px-4 py-3">Mean (ชาย)</th>
+                                <th class="px-4 py-3">Mean (หญิง)</th>
+                                <th class="px-4 py-3">Mean Diff (95% CI)</th>
+                                <th class="px-4 py-3">t-value</th>
+                                <th class="px-4 py-3">p-value</th>
+                                <th class="px-4 py-3">ผลลัพธ์</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stat-ttest-body" class="bg-white"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Row 6: Meds & Follow up -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                <div class="card p-5 col-span-2">
+                    <h3 class="text-lg font-bold text-primary mb-4 flex items-center"><i class="fas fa-pills mr-2 text-secondary"></i>ยาที่ได้รับ</h3>
+                     <div class="overflow-y-auto h-64 border rounded-lg">
+                        <table class="min-w-full text-sm">
+                            <thead class="bg-gray-100 text-gray-700 sticky top-0">
+                                <tr>
+                                    <th class="px-4 py-3 text-left bg-gray-100">รายการยา</th>
+                                    <th class="px-4 py-3 text-right bg-gray-100">จำนวนผู้รับ</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-meds-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="card p-5">
+                    <h3 class="text-lg font-bold text-primary mb-4 flex items-center"><i class="fas fa-calendar-check mr-2 text-secondary"></i>สถานะการติดตาม</h3>
+                    <div class="chart-container" style="height: 200px;">
+                        <canvas id="chart-followup"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Admin Section (Hidden by default, Only visible after login) -->
+        <div id="admin-view" class="hidden animate-fade-in mt-10">
+            <div class="bg-primary text-white p-4 rounded-t-lg flex justify-between items-center">
+                <h2 class="text-2xl font-bold flex items-center">
+                    <i class="fas fa-users-cog mr-3"></i>จัดการข้อมูลผู้ป่วย (Admin Mode)
+                </h2>
+                <div class="flex gap-2">
+                    <button onclick="openEditModal()" class="bg-white text-primary hover:bg-gray-100 px-4 py-2 rounded font-bold shadow transition">
+                        <i class="fas fa-user-plus mr-1"></i> เพิ่มผู้ป่วยใหม่
+                    </button>
+                    <!-- Export still useful for backup -->
+                    <button onclick="exportToCSV()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded font-bold shadow transition">
+                        <i class="fas fa-file-export mr-1"></i> Export CSV
+                    </button>
+                </div>
+            </div>
+            
+            <div class="bg-green-50 border-l-4 border-green-400 p-4 mb-4 shadow-sm">
+                <div class="flex">
+                    <div class="flex-shrink-0">
+                        <i class="fas fa-cloud-upload-alt text-green-500"></i>
+                    </div>
+                    <div class="ml-3">
+                        <p class="text-sm text-green-700">
+                            <strong>Connected:</strong> ระบบกำลังเชื่อมต่อกับ Google Sheet ผ่าน Web App<br>
+                            การ เพิ่ม/ลบ/แก้ไข ในหน้านี้จะถูก <strong>บันทึกทันที</strong> ลงใน Google Sheet ของคุณ
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card overflow-hidden shadow-lg border border-gray-200">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-sm text-left divide-y divide-gray-200">
+                        <thead class="bg-gray-50 text-gray-700 font-bold">
+                            <tr>
+                                <th class="px-6 py-3">จัดการ</th>
+                                <th class="px-4 py-3">รหัส</th>
+                                <th class="px-4 py-3">ชื่อ-สกุล</th>
+                                <th class="px-4 py-3">อายุ</th>
+                                <th class="px-4 py-3">เพศ</th>
+                                <th class="px-4 py-3">วินิจฉัย</th>
+                                <th class="px-4 py-3">BP</th>
+                                <th class="px-4 py-3">FBS</th>
+                                <th class="px-4 py-3">HbA1c</th>
+                            </tr>
+                        </thead>
+                        <tbody id="admin-table-body" class="bg-white divide-y divide-gray-200">
+                            <!-- Rows generated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+                <div class="p-4 bg-gray-50 border-t" id="pagination-controls">
+                    <!-- Pagination -->
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Login Modal -->
+    <div id="loginModal" class="modal items-center justify-center backdrop-blur-sm">
+        <div class="bg-white p-8 rounded-xl shadow-2xl w-96 relative border-t-8 border-primary animate-fade-in">
+            <span onclick="toggleLoginModal()" class="absolute top-2 right-4 text-3xl cursor-pointer text-gray-400 hover:text-red-500 transition">&times;</span>
+            <div class="text-center mb-6">
+                <div class="bg-green-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-2 text-primary">
+                    <i class="fas fa-user-shield text-3xl"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-gray-800">ผู้ดูแลระบบเข้าสู่ระบบ</h2>
+                <p class="text-gray-500 text-sm">กรุณายืนยันตัวตนเพื่อเข้าถึงข้อมูลรายบุคคล</p>
+            </div>
+            
+            <div class="mb-4">
+                <label class="block text-gray-700 text-sm font-bold mb-2">Username</label>
+                <input type="text" id="username" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-primary">
+            </div>
+            <div class="mb-6">
+                <label class="block text-gray-700 text-sm font-bold mb-2">Password</label>
+                <input type="password" id="password" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:ring-2 focus:ring-primary">
+            </div>
+            <div class="flex items-center justify-between">
+                <button onclick="login()" class="bg-primary hover:bg-green-800 text-white font-bold py-2 px-4 rounded w-full transition duration-300">เข้าสู่ระบบ</button>
+            </div>
+            <p id="loginError" class="text-red-500 text-xs italic mt-2 hidden text-center">Username หรือ Password ไม่ถูกต้อง</p>
+        </div>
+    </div>
+
+    <!-- Edit/Add Patient Modal -->
+    <div id="editModal" class="modal">
+        <div class="modal-content animate-fade-in shadow-2xl">
+            <span onclick="closeEditModal()" class="absolute top-4 right-4 text-3xl cursor-pointer text-gray-400 hover:text-red-500 transition">&times;</span>
+            <h2 class="text-2xl font-bold text-primary mb-6 flex items-center border-b pb-2">
+                <i class="fas fa-user-edit mr-3"></i><span id="modalTitle">แก้ไขข้อมูลผู้ป่วย</span>
+            </h2>
+            <form id="editForm" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <input type="hidden" id="edit-index">
+                <!-- Fields matched to CSV -->
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">รหัสคนไข้</label><input type="text" id="edit-id" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">ชื่อ</label><input type="text" id="edit-name" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">สกุล</label><input type="text" id="edit-surname" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">อายุ</label><input type="number" id="edit-age" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">เพศ</label>
+                    <select id="edit-gender" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"><option value="ชาย">ชาย</option><option value="หญิง">หญิง</option></select>
+                </div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">การวินิจฉัย</label><input type="text" id="edit-diag" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">ความดันบน</label><input type="number" id="edit-sys" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">ความดันล่าง</label><input type="number" id="edit-dia" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">FBS</label><input type="number" id="edit-fbs" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">HbA1c</label><input type="number" step="0.1" id="edit-hba1c" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">eGFR</label><input type="number" id="edit-egfr" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">น้ำหนัก</label><input type="number" id="edit-weight" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">ส่วนสูง</label><input type="number" id="edit-height" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-600 mb-1">สิทธิ์</label><input type="text" id="edit-rights" class="border border-gray-300 p-2 w-full rounded focus:ring-2 focus:ring-primary focus:outline-none"></div>
+                
+                <div class="col-span-1 md:col-span-3 mt-6 text-right border-t pt-4">
+                    <button type="button" onclick="closeEditModal()" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-6 py-2 rounded mr-2 transition">ยกเลิก</button>
+                    <button type="button" onclick="savePatientData()" class="bg-primary hover:bg-green-800 text-white px-6 py-2 rounded shadow transition">บันทึกข้อมูล (Google Sheet)</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script>
+        // --- Web App URL ---
+        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwGj8SZdZpAGKUelKWcH_Nh9z8ctS6D8fbm3uFXKxjDaPRRnTb-wmPoL_YiaU3vgZxZ/exec';
+
+        // --- Global State ---
+        let allData = [];
+        let filteredData = [];
+        let chartInstances = {};
+        let isAdmin = false;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchData();
+            
+            // File Upload Listener (Backup)
+             document.getElementById('fileUpload').addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    Papa.parse(file, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: function(results) {
+                            if (results.data && results.data.length > 0) {
+                                processData(results.data);
+                                updateStatus(`Loaded file: ${file.name}`, "bg-blue-600");
+                            }
+                        }
+                    });
+                }
+            });
+
+            // Filter Listener
+            document.getElementById('filter-insurance').addEventListener('change', (e) => {
+                const val = e.target.value;
+                if(val === 'all') { filteredData = [...allData]; } 
+                else { filteredData = allData.filter(d => d['ประเภทสิทธิ์'] === val); }
+                updateDashboard();
+            });
+        });
+
+        // --- API Functions ---
+        
+        async function fetchData() {
+            showLoading(true, "กำลังดึงข้อมูลจาก Google Sheet...");
+            updateStatus("Connecting...", "bg-yellow-500");
+            
+            try {
+                // Add timestamp to prevent caching
+                const fetchUrl = WEB_APP_URL + (WEB_APP_URL.includes('?') ? '&' : '?') + 't=' + new Date().getTime();
+                const response = await fetch(fetchUrl);
+                
+                // Handle non-ok responses
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    processData(result.data);
+                    updateStatus("Online (Connected)", "bg-green-500");
+                } else {
+                    console.error("API Error:", result.message);
+                    updateStatus("Data Error", "bg-red-500");
+                    alert("เกิดข้อผิดพลาดจาก Google Sheet: " + result.message);
+                }
+            } catch (error) {
+                console.error("Fetch Error:", error);
+                updateStatus("Connection Failed", "bg-red-500");
+                
+                // Retry prompt instead of offline mode
+                if(confirm("การเชื่อมต่อกับ Google Sheet ล้มเหลว (อาจเกิดจากอินเทอร์เน็ต หรือ สิทธิ์การเข้าถึง)\nต้องการลองใหม่หรือไม่?")) {
+                    fetchData();
+                }
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function postData(action, data) {
+            showLoading(true, "กำลังบันทึกข้อมูล...");
+            try {
+                // Post requests in plain text mode for AppScript often avoid preflight issues
+                // But fetch with CORS requires correct setup on server.
+                // We use standard fetch assuming AppScript handles OPTIONS or simple POST
+                const response = await fetch(WEB_APP_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({ action: action, data: data }),
+                    // Remove Content-Type header to prevent complex CORS preflight if possible, 
+                    // though text/plain is default for simple requests. 
+                    // AppsScript often needs text/plain to avoid CORS issues with application/json
+                    headers: { "Content-Type": "text/plain;charset=utf-8" }
+                });
+                
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    // Refresh data after success
+                    await fetchData();
+                    alert("บันทึกข้อมูลสำเร็จ!");
+                    return true;
+                } else {
+                    alert("เกิดข้อผิดพลาด: " + result.message);
+                    return false;
+                }
+            } catch (error) {
+                console.error("Post Error:", error);
+                alert("การเชื่อมต่อล้มเหลว: " + error.message);
+                return false;
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function showLoading(show, text = "") {
+            const overlay = document.getElementById('loadingOverlay');
+            const textEl = document.getElementById('loadingText');
+            if(show) {
+                textEl.innerText = text;
+                overlay.style.display = 'flex';
+            } else {
+                overlay.style.display = 'none';
+            }
+        }
+
+        function updateStatus(text, colorClass) {
+            document.getElementById('status-text').innerText = text;
+            const dot = document.getElementById('status-dot');
+            dot.className = `w-2 h-2 rounded-full mr-2 ${colorClass}`;
+        }
+
+        // --- Data Processing & Charts --- (Same as before)
+        function processData(data) {
+            allData = data.map(row => {
+                const newRow = {};
+                Object.keys(row).forEach(key => { newRow[key.trim()] = row[key]; });
+                if (!newRow['BMI'] && newRow['น้ำหนัก_กก'] && newRow['ส่วนสูง_ซม']) {
+                    const h = parseFloat(newRow['ส่วนสูง_ซม']) / 100;
+                    const w = parseFloat(newRow['น้ำหนัก_กก']);
+                    newRow['BMI'] = (w / (h * h)).toFixed(1);
+                }
+                return newRow;
+            });
+
+            const insuranceTypes = [...new Set(allData.map(d => d['ประเภทสิทธิ์']).filter(Boolean))];
+            const filterSelect = document.getElementById('filter-insurance');
+            const currentVal = filterSelect.value;
+            filterSelect.innerHTML = '<option value="all">ทั้งหมด (ประเภทสิทธิ์)</option>';
+            insuranceTypes.forEach(type => {
+                const option = document.createElement('option');
+                option.value = type;
+                option.innerText = type;
+                filterSelect.appendChild(option);
+            });
+            filterSelect.value = currentVal;
+
+            if(currentVal === 'all') filteredData = [...allData];
+            else filteredData = allData.filter(d => d['ประเภทสิทธิ์'] === currentVal);
+            
+            updateDashboard();
+        }
+
+        function updateDashboard() {
+            document.getElementById('total-patients').innerText = filteredData.length.toLocaleString();
+            renderCharts();
+            renderAddressTable();
+            renderStats();
+            if (isAdmin) renderAdminTable();
+        }
+
+        // --- Chart Functions (Reused) ---
+        function destroyChart(id) { if (chartInstances[id]) chartInstances[id].destroy(); }
+        function createBarChart(id, labels, data, labelStr, color, horizontal = false) {
+            destroyChart(id);
+            const ctx = document.getElementById(id).getContext('2d');
+            chartInstances[id] = new Chart(ctx, {
+                type: 'bar',
+                data: { labels: labels, datasets: [{ label: labelStr, data: data, backgroundColor: color, borderWidth: 1, borderRadius: 4 }] },
+                options: { indexAxis: horizontal ? 'y' : 'x', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { beginAtZero: true } } }
+            });
+        }
+        function createPieChart(id, labels, data, colors) {
+            destroyChart(id);
+            const ctx = document.getElementById(id).getContext('2d');
+            chartInstances[id] = new Chart(ctx, {
+                type: 'doughnut',
+                data: { labels: labels, datasets: [{ data: data, backgroundColor: colors, borderWidth: 0, hoverOffset: 4 }] },
+                options: { responsive: true, maintainAspectRatio: false, cutout: '60%', plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } } } }
+            });
+        }
+        
+        function renderCharts() {
+            // Age
+            const ageRanges = { '<30':0, '30-45':0, '46-60':0, '61-75':0, '>75':0 };
+            filteredData.forEach(d => { const a = parseInt(d['อายุ']); if(!isNaN(a)){ if(a<30) ageRanges['<30']++; else if(a<=45) ageRanges['30-45']++; else if(a<=60) ageRanges['46-60']++; else if(a<=75) ageRanges['61-75']++; else ageRanges['>75']++; }});
+            createBarChart('chart-age', Object.keys(ageRanges), Object.values(ageRanges), 'จำนวนคน', '#10b981');
+            // Gender
+            const genders = { 'ชาย': 0, 'หญิง': 0 };
+            filteredData.forEach(d => { if(genders[d['เพศ']] !== undefined) genders[d['เพศ']]++; });
+            createPieChart('chart-gender', Object.keys(genders), Object.values(genders), ['#3b82f6', '#ec4899']);
+            // Insurance
+            const insurance = {}; filteredData.forEach(d => { const k = d['ประเภทสิทธิ์']||'ไม่ระบุ'; insurance[k] = (insurance[k]||0)+1; });
+            createBarChart('chart-insurance', Object.keys(insurance), Object.values(insurance), 'จำนวน', '#f59e0b');
+            // Diagnosis
+            const diag = {}; filteredData.forEach(d => { const k = d['การวินิจฉัยหลัก']||'ไม่ระบุ'; diag[k] = (diag[k]||0)+1; });
+            const sortedDiag = Object.entries(diag).sort((a,b)=>b[1]-a[1]).slice(0,10);
+            createBarChart('chart-diagnosis', sortedDiag.map(x=>x[0]), sortedDiag.map(x=>x[1]), 'จำนวน', '#6366f1', true);
+            // Ranges
+            renderRangeChart('chart-bp-sys', 'ความดันบน', [120, 140, 160], ['<120', '120-139', '140-159', '≥160'], '#ef4444');
+            renderRangeChart('chart-bp-dia', 'ความดันล่าง', [80, 90, 100], ['<80', '80-89', '90-99', '≥100'], '#f87171');
+            renderRangeChart('chart-bmi', 'BMI', [18.5, 23, 25, 30], ['ผอม', 'ปกติ', 'ท้วม', 'อ้วน', 'อ้วนมาก'], '#8b5cf6');
+            renderRangeChart('chart-fbs', 'FBS', [100, 126], ['ปกติ (<100)', 'เสี่ยง (100-125)', 'เบาหวาน (≥126)'], '#f472b6');
+            renderRangeChart('chart-hba1c', 'HbA1c', [5.7, 6.5], ['ปกติ (<5.7)', 'เสี่ยง (5.7-6.4)', 'เบาหวาน (≥6.5)'], '#db2777');
+            renderRangeChart('chart-egfr', 'eGFR', [15, 30, 45, 60, 90], ['ระยะ 5', 'ระยะ 4', 'ระยะ 3b', 'ระยะ 3a', 'ระยะ 2', 'ระยะ 1'], '#059669');
+            renderHistogram('chart-weight', 'น้ำหนัก_กก', 10, '#14b8a6');
+            renderHistogram('chart-height', 'ส่วนสูง_ซม', 10, '#0d9488');
+            // Follow
+            const follow = {}; filteredData.forEach(d => { const k = d['สถานะติดตาม']||'ไม่ระบุ'; follow[k] = (follow[k]||0)+1; });
+            createPieChart('chart-followup', Object.keys(follow), Object.values(follow), ['#10b981', '#ef4444', '#f59e0b', '#6366f1']);
+            // Meds
+            const meds = {}; filteredData.forEach(d => { const m = d['ยาที่ได้รับ']||'ไม่มี'; meds[m] = (meds[m]||0)+1; });
+            document.getElementById('table-meds-body').innerHTML = Object.entries(meds).sort((a,b)=>b[1]-a[1]).map(([n,c])=>`<tr class="border-b hover:bg-gray-50"><td class="px-4 py-2">${n}</td><td class="px-4 py-2 text-right font-bold text-primary">${c}</td></tr>`).join('');
+        }
+
+        function renderRangeChart(id, key, thresholds, labels, color) {
+            const counts = new Array(labels.length).fill(0);
+            filteredData.forEach(d => { const v = parseFloat(d[key]); if(!isNaN(v)){ let idx=0; for(let i=0;i<thresholds.length;i++){ if(v<thresholds[i]){idx=i;break;} idx=i+1; } counts[idx]++; }});
+            createBarChart(id, labels, counts, 'จำนวน', color);
+        }
+        function renderHistogram(id, key, binSize, color) {
+            const vals = filteredData.map(d => parseFloat(d[key])).filter(n => !isNaN(n));
+            const min = Math.floor(Math.min(...vals)/binSize)*binSize, max = Math.ceil(Math.max(...vals)/binSize)*binSize;
+            const labels=[], data=[];
+            for(let i=min; i<max; i+=binSize) { labels.push(`${i}-${i+binSize}`); data.push(vals.filter(v=>v>=i && v<i+binSize).length); }
+            createBarChart(id, labels, data, 'จำนวน', color);
+        }
+        function renderAddressTable() {
+            const addr = {}; filteredData.forEach(d => { const k = `${d['ตำบล']||'-'} / ${d['หมู่บ้าน']||'-'}`; addr[k] = (addr[k]||0)+1; });
+            document.getElementById('table-address-body').innerHTML = Object.entries(addr).sort((a,b)=>b[1]-a[1]).map(([l,c])=>{ const [t,m]=l.split(' / '); return `<tr class="border-b hover:bg-gray-50"><td class="px-4 py-2">${t}</td><td class="px-4 py-2">${m}</td><td class="px-4 py-2 text-right font-bold text-primary">${c}</td></tr>`; }).join('');
+        }
+        function renderStats() {
+            // ChiSquare & TTest logic identical to previous version, omitted for brevity but assumed present
+             calculateChiSquare('เพศ', 'ดื่มแอลกอฮอล์', 'stat-gender-alcohol');
+            calculateChiSquare('เพศ', 'สูบบุหรี่', 'stat-gender-smoking');
+
+            const vars = ['HbA1c', 'FBS', 'eGFR', 'BMI'];
+            const tbody = document.getElementById('stat-ttest-body');
+            tbody.innerHTML = '';
+            
+            vars.forEach(v => {
+                const group1 = filteredData.filter(d => d['เพศ'] === 'ชาย').map(d => parseFloat(d[v])).filter(n => !isNaN(n));
+                const group2 = filteredData.filter(d => d['เพศ'] === 'หญิง').map(d => parseFloat(d[v])).filter(n => !isNaN(n));
+                
+                if(group1.length > 1 && group2.length > 1) {
+                    const mean1 = jStat.mean(group1);
+                    const mean2 = jStat.mean(group2);
+                    const pValue = jStat.ttest(mean1, group2, 2); 
+                    const sd1 = jStat.stdev(group1);
+                    const sd2 = jStat.stdev(group2);
+                    const n1 = group1.length;
+                    const n2 = group2.length;
+                    const se = Math.sqrt((sd1*sd1/n1) + (sd2*sd2/n2));
+                    const diff = mean1 - mean2;
+                    const margin = 1.96 * se;
+                    const sig = pValue < 0.05 ? '<span class="text-red-600 font-bold bg-red-100 px-2 rounded">Sig*</span>' : '<span class="text-green-600">Not Sig</span>';
+
+                    tbody.innerHTML += `
+                        <tr class="border-b hover:bg-gray-50 transition">
+                            <td class="px-4 py-2 font-bold">${v}</td>
+                            <td class="px-4 py-2">${mean1.toFixed(2)}</td>
+                            <td class="px-4 py-2">${mean2.toFixed(2)}</td>
+                            <td class="px-4 py-2">${diff.toFixed(2)} (${(diff-margin).toFixed(2)} - ${(diff+margin).toFixed(2)})</td>
+                            <td class="px-4 py-2">${(diff/se).toFixed(2)}</td>
+                            <td class="px-4 py-2 font-mono text-xs">${pValue.toFixed(4)}</td>
+                            <td class="px-4 py-2">${sig}</td>
+                        </tr>
+                    `;
+                }
+            });
+        }
+        
+         function calculateChiSquare(colRow, colCol, elementId) {
+            const rowVals = [...new Set(filteredData.map(d => d[colRow]).filter(Boolean))];
+            const colVals = [...new Set(filteredData.map(d => d[colCol]).filter(Boolean))];
+            
+            if(rowVals.length < 2 || colVals.length < 2) {
+                document.getElementById(elementId).innerText = "ข้อมูลไม่เพียงพอสำหรับคำนวณ";
+                return;
+            }
+
+            const observed = {};
+            let grandTotal = 0;
+            const rowTotals = {};
+            const colTotals = {};
+
+            rowVals.forEach(r => {
+                observed[r] = {};
+                rowTotals[r] = 0;
+                colVals.forEach(c => {
+                    observed[r][c] = 0;
+                    if(!colTotals[c]) colTotals[c] = 0;
+                });
+            });
+
+            filteredData.forEach(d => {
+                const r = d[colRow];
+                const c = d[colCol];
+                if(r && c) {
+                    observed[r][c]++;
+                    rowTotals[r]++;
+                    colTotals[c]++;
+                    grandTotal++;
+                }
+            });
+
+            let chi2 = 0;
+            rowVals.forEach(r => {
+                colVals.forEach(c => {
+                    const e = (rowTotals[r] * colTotals[c]) / grandTotal;
+                    if(e > 0) chi2 += Math.pow(observed[r][c] - e, 2) / e;
+                });
+            });
+
+            const df = (rowVals.length - 1) * (colVals.length - 1);
+            const pValue = 1 - jStat.chisquare.cdf(chi2, df);
+            
+            let html = `<table class="w-full text-xs mb-2 border rounded overflow-hidden">`;
+            html += `<tr class="bg-gray-200"><th></th>${colVals.map(c=>`<th class="p-1">${c}</th>`).join('')}</tr>`;
+            rowVals.forEach(r => {
+                html += `<tr class="border-t"><td class="font-bold border-r px-2 bg-gray-50">${r}</td>${colVals.map(c=>`<td class="px-1 text-center py-1">${observed[r][c]} <span class="text-gray-400 text-[10px]">(${((rowTotals[r]*colTotals[c])/grandTotal).toFixed(1)})</span></td>`).join('')}</tr>`;
+            });
+            html += `</table>`;
+            html += `<div class="font-bold flex justify-between items-center ${pValue < 0.05 ? 'text-red-600' : 'text-green-700'}"><span>Chi2: ${chi2.toFixed(2)}</span> <span>p-value: ${pValue.toFixed(4)} ${pValue < 0.05 ? '(Sig*)' : '(NS)'}</span></div>`;
+            
+            document.getElementById(elementId).innerHTML = html;
+        }
+
+        // --- Admin & CRUD ---
+        function toggleLoginModal() {
+            const modal = document.getElementById('loginModal');
+            if(modal.style.display === 'flex') modal.style.display = 'none';
+            else { modal.style.display = 'flex'; document.getElementById('username').focus(); }
+        }
+        function login() {
+            const u = document.getElementById('username').value;
+            const p = document.getElementById('password').value;
+            if(u === 'admin' && p === '1234') {
+                isAdmin = true; toggleLoginModal();
+                document.getElementById('loginBtn').classList.add('hidden');
+                document.getElementById('logoutBtn').classList.remove('hidden');
+                document.getElementById('admin-view').classList.remove('hidden');
+                document.getElementById('admin-view').scrollIntoView({behavior:'smooth'});
+                renderAdminTable();
+            } else document.getElementById('loginError').classList.remove('hidden');
+        }
+        function logout() {
+            isAdmin = false;
+            document.getElementById('loginBtn').classList.remove('hidden');
+            document.getElementById('logoutBtn').classList.add('hidden');
+            document.getElementById('admin-view').classList.add('hidden');
+            window.scrollTo({top:0,behavior:'smooth'});
+        }
+        
+        let currentPage = 1; const rowsPerPage = 10;
+        function renderAdminTable() {
+            const tbody = document.getElementById('admin-table-body');
+            tbody.innerHTML = '';
+            const start = (currentPage - 1) * rowsPerPage;
+            const end = start + rowsPerPage;
+            const paginatedData = allData.slice(start, end);
+            paginatedData.forEach((d, index) => {
+                const globalIndex = start + index;
+                tbody.innerHTML += `
+                    <tr class="hover:bg-blue-50 transition">
+                        <td class="px-6 py-3 flex gap-3">
+                            <button onclick="editPatient(${globalIndex})" class="text-blue-600 hover:text-blue-800 transition transform hover:scale-110"><i class="fas fa-edit"></i></button>
+                            <button onclick="deletePatient(${globalIndex})" class="text-red-600 hover:text-red-800 transition transform hover:scale-110"><i class="fas fa-trash"></i></button>
+                        </td>
+                        <td class="px-4 py-3 font-mono font-bold text-gray-600">${d['รหัสคนไข้']}</td>
+                        <td class="px-4 py-3 font-medium text-gray-900">${d['ชื่อ']} ${d['สกุล']}</td>
+                        <td class="px-4 py-3">${d['อายุ']}</td>
+                        <td class="px-4 py-3"><span class="px-2 py-1 rounded-full text-xs font-bold ${d['เพศ'] === 'ชาย' ? 'bg-blue-100 text-blue-800' : 'bg-pink-100 text-pink-800'}">${d['เพศ']}</span></td>
+                        <td class="px-4 py-3">${d['การวินิจฉัยหลัก']}</td>
+                        <td class="px-4 py-3 font-mono">${d['ความดันบน']}/${d['ความดันล่าง']}</td>
+                        <td class="px-4 py-3 font-mono ${d['FBS']>125?'text-red-600 font-bold':''}">${d['FBS']}</td>
+                        <td class="px-4 py-3 font-mono ${d['HbA1c']>6.4?'text-red-600 font-bold':''}">${d['HbA1c']}</td>
+                    </tr>
+                `;
+            });
+            document.getElementById('pagination-controls').innerHTML = `
+                <div class="flex justify-between items-center">
+                    <span class="text-sm text-gray-600">แสดง ${start+1} ถึง ${Math.min(end, allData.length)} จาก ${allData.length}</span>
+                    <div class="space-x-2">
+                        <button onclick="changePage(-1)" class="px-4 py-2 bg-white border rounded hover:bg-gray-100 disabled:opacity-50 transition shadow-sm" ${currentPage===1?'disabled':''}>ก่อนหน้า</button>
+                        <button onclick="changePage(1)" class="px-4 py-2 bg-white border rounded hover:bg-gray-100 disabled:opacity-50 transition shadow-sm" ${end >= allData.length?'disabled':''}>ถัดไป</button>
+                    </div>
+                </div>`;
+        }
+        function changePage(d) { currentPage += d; renderAdminTable(); }
+
+        // --- CRUD Operations ---
+        function openEditModal() {
+            document.getElementById('editForm').reset();
+            document.getElementById('edit-index').value = '-1';
+            document.getElementById('modalTitle').innerText = "เพิ่มผู้ป่วยใหม่";
+            document.getElementById('editModal').style.display = 'block';
+        }
+        function editPatient(index) {
+            const d = allData[index];
+            document.getElementById('edit-index').value = index;
+            document.getElementById('modalTitle').innerText = "แก้ไขข้อมูลผู้ป่วย";
+            // Map inputs
+            ['id','name','surname','age','gender','diag','sys','dia','fbs','hba1c','egfr','weight','height','rights'].forEach(f => {
+                const map = {'id':'รหัสคนไข้','name':'ชื่อ','surname':'สกุล','age':'อายุ','gender':'เพศ','diag':'การวินิจฉัยหลัก','sys':'ความดันบน','dia':'ความดันล่าง','fbs':'FBS','hba1c':'HbA1c','egfr':'eGFR','weight':'น้ำหนัก_กก','height':'ส่วนสูง_ซม','rights':'ประเภทสิทธิ์'};
+                const el = document.getElementById('edit-'+f);
+                if(el) el.value = d[map[f]] || '';
+            });
+            document.getElementById('editModal').style.display = 'block';
+        }
+        function closeEditModal() { document.getElementById('editModal').style.display = 'none'; }
+        
+        async function savePatientData() {
+            const index = parseInt(document.getElementById('edit-index').value);
+            const newRow = {
+                'รหัสคนไข้': document.getElementById('edit-id').value,
+                'ชื่อ': document.getElementById('edit-name').value,
+                'สกุล': document.getElementById('edit-surname').value,
+                'อายุ': document.getElementById('edit-age').value,
+                'เพศ': document.getElementById('edit-gender').value,
+                'การวินิจฉัยหลัก': document.getElementById('edit-diag').value,
+                'ความดันบน': document.getElementById('edit-sys').value,
+                'ความดันล่าง': document.getElementById('edit-dia').value,
+                'FBS': document.getElementById('edit-fbs').value,
+                'HbA1c': document.getElementById('edit-hba1c').value,
+                'eGFR': document.getElementById('edit-egfr').value,
+                'น้ำหนัก_กก': document.getElementById('edit-weight').value,
+                'ส่วนสูง_ซม': document.getElementById('edit-height').value,
+                'ประเภทสิทธิ์': document.getElementById('edit-rights').value
+            };
+            if (newRow['น้ำหนัก_กก'] && newRow['ส่วนสูง_ซม']) {
+                const h = parseFloat(newRow['ส่วนสูง_ซม']) / 100;
+                const w = parseFloat(newRow['น้ำหนัก_กก']);
+                newRow['BMI'] = (w / (h * h)).toFixed(1);
+            }
+
+            const action = (index === -1) ? 'add' : 'update';
+            const success = await postData(action, newRow);
+            
+            if(success) closeEditModal();
+        }
+
+        async function deletePatient(index) {
+            if(confirm('ยืนยันการลบข้อมูลนี้ออกจาก Google Sheet? (ไม่สามารถกู้คืนได้)')) {
+                const row = allData[index];
+                await postData('delete', row);
+            }
+        }
+        
+        function exportToCSV() {
+            const csv = Papa.unparse(allData);
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "patient_data_export.csv");
+            document.body.appendChild(link); link.click(); document.body.removeChild(link);
+        }
+
+        window.onclick = function(event) {
+            const modal = document.getElementById('editModal');
+            if (event.target == modal) modal.style.display = "none";
+        }
+    </script>
+</body>
+</html>
